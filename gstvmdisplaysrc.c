@@ -80,6 +80,30 @@ static GstStaticPadTemplate srctemplate = GST_STATIC_PAD_TEMPLATE ("src",
     GST_PAD_ALWAYS,
     GST_STATIC_CAPS (gst_vmdisplay_src_caps_str));
 
+enum
+{
+  GST_VMDISPLAYSRC_IO_MODE_DMABUF_EXPORT = 1,
+  GST_VMDISPLAYSRC_IO_MODE_DMABUF_IMPORT = 2,
+};
+
+#define GST_VMDISPLAYSRC_IO_MODE_TYPE (gst_vmdisplaysrc_io_mode_get_type())
+static GType
+gst_vmdisplaysrc_io_mode_get_type (void)
+{
+  static GType type = 0;
+
+  static const GEnumValue values[] = {
+    {GST_VMDISPLAYSRC_IO_MODE_DMABUF_EXPORT, "Export dmabuf", "dmabuf-export"},
+    {GST_VMDISPLAYSRC_IO_MODE_DMABUF_IMPORT, "Import dmabuf", "dmabuf-import"},
+    {0, NULL, NULL}
+  };
+
+  if (!type) {
+    type = g_enum_register_static ("GstVMDisplayIOMode", values);
+  }
+  return type;
+}
+
 extern int drmModeAddFB (int fd, uint32_t width, uint32_t height, uint8_t depth,
     uint8_t bpp, uint32_t pitch, uint32_t bo_handle, uint32_t * buf_id);
 int drmIoctl (int fd, unsigned long request, void *arg);
@@ -151,12 +175,17 @@ gst_vmdisplaysrc_class_init (GstVmdisplaysrcClass * klass)
           0, 4, 0, G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
 
   g_object_class_install_property (gobject_class, PROP_IO_MODE,
-      g_param_spec_int ("io-mode", "io-mode",
-          "5 is dma_buf", 0, 5, 5, G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
+      g_param_spec_enum ("io-mode", "io-mode",
+          "I/O mode ", gst_vmdisplaysrc_io_mode_get_type (),
+          GST_VMDISPLAYSRC_IO_MODE_DMABUF_EXPORT,
+          G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
 
   gst_element_class_set_static_metadata (GST_ELEMENT_CLASS (klass),
       "VMDisplay source", "Source/Video",
-      "Zero copy source plugin for VMDisplay scraping", "Intel Corporation");
+      "Zero copy source plugin for VMDisplay scraping",
+      "Sreerenj Balachandran <sreerenj.balachandran@intel.com>, "
+      "Philippuse, Philippe <.Lecluse@intel.com>, "
+      "Hatcher, Philip <philip.hatcher@intel.com>");
 
   gst_element_class_add_static_pad_template (GST_ELEMENT_CLASS (klass),
       &srctemplate);
@@ -172,6 +201,7 @@ gst_vmdisplaysrc_class_init (GstVmdisplaysrcClass * klass)
 static void
 gst_vmdisplaysrc_init (GstVmdisplaysrc * vmdisplaysrc)
 {
+  vmdisplaysrc->io_mode = GST_VMDISPLAYSRC_IO_MODE_DMABUF_EXPORT;
   gst_video_info_init (&vmdisplaysrc->info);
 }
 
@@ -191,7 +221,12 @@ gst_vmdisplaysrc_set_property (GObject * object, guint property_id,
       vmdisplaysrc->pipe = g_value_get_int (value);
       break;
     case PROP_IO_MODE:
-      vmdisplaysrc->io_mode = g_value_get_int (value);
+      vmdisplaysrc->io_mode = g_value_get_enum (value);
+      /* Fixme: probably we only need dmabuf export ? */
+      if (vmdisplaysrc->io_mode != GST_VMDISPLAYSRC_IO_MODE_DMABUF_EXPORT) {
+        GST_WARNING_OBJECT (vmdisplaysrc,
+            "dmabuf export is the only supported mode!");
+      }
       break;
 
     default:
@@ -216,7 +251,7 @@ gst_vmdisplaysrc_get_property (GObject * object, guint property_id,
       g_value_set_int (value, vmdisplaysrc->pipe);
       break;
     case PROP_IO_MODE:
-      g_value_set_int (value, vmdisplaysrc->io_mode);
+      g_value_set_enum (value, vmdisplaysrc->io_mode);
       break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, property_id, pspec);
@@ -472,7 +507,7 @@ gst_vmdisplaysrc_create (GstPushSrc * psrc, GstBuffer ** outbuf)
       gst_print ("PRIME from handle failed, %d\n", errno);
       /* buffer creation failed; see "errno" for more error codes */
     } else
-      gst_print ("FD is %d (s= 0x%x)\n", preq.fd, (gint)creq.size);
+      gst_print ("FD is %d (s= 0x%x)\n", preq.fd, (gint) creq.size);
 
     myMem =
         gst_dmabuf_allocator_alloc (vmdisplaysrc->allocator, preq.fd,
