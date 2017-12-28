@@ -52,7 +52,7 @@
 #include <sys/mman.h>
 #include <errno.h>
 #include <sys/ioctl.h>
-
+#include <unistd.h>
 #ifndef DRM_RDWR
 #define DRM_RDWR O_RDWR
 #endif
@@ -203,6 +203,7 @@ gst_vmdisplaysrc_init (GstVmdisplaysrc * vmdisplaysrc)
 {
   vmdisplaysrc->io_mode = GST_VMDISPLAYSRC_IO_MODE_DMABUF_EXPORT;
   gst_video_info_init (&vmdisplaysrc->info);
+  vmdisplaysrc->allocator = gst_dmabuf_allocator_new ();
 }
 
 void
@@ -267,15 +268,17 @@ gst_vmdisplaysrc_start (GstBaseSrc * src)
   GstVmdisplaysrc *vmdisplaysrc = GST_VMDISPLAYSRC (src);
 
   GST_DEBUG_OBJECT (vmdisplaysrc, "start");
-  GST_OBJECT_LOCK (vmdisplaysrc);
-  gst_video_info_init (&vmdisplaysrc->info);
-  GST_OBJECT_UNLOCK (vmdisplaysrc);
 
-  vmdisplaysrc->allocator = gst_dmabuf_allocator_new ();
-  if (vmdisplaysrc->allocator == NULL) {
-    gst_print ("Allocator creation failed!!\n");
+  if (!vmdisplaysrc->allocator) {
+    GST_ERROR_OBJECT (vmdisplaysrc, "No gst-dmabuf Allocator!!");
+    return FALSE;
   }
+
   vmdisplaysrc->fd = open ("/dev/dri/card0", O_RDWR);
+  if (vmdisplaysrc->fd < 0) {
+    GST_ERROR ("Couldn't open /dev/dri/card0");
+    return FALSE;
+  }
 
   return TRUE;
 }
@@ -286,6 +289,10 @@ gst_vmdisplaysrc_stop (GstBaseSrc * src)
   GstVmdisplaysrc *vmdisplaysrc = GST_VMDISPLAYSRC (src);
 
   GST_DEBUG_OBJECT (vmdisplaysrc, "stop");
+
+  if (vmdisplaysrc->fd)
+    close (vmdisplaysrc->fd);
+
   //PPP -- Need to free up some stuff here??
   return TRUE;
 }
@@ -328,6 +335,9 @@ gst_vmdisplaysrc_is_seekable (GstBaseSrc * basesrc)
 static void
 gst_vmdisplaysrc_finalize (GObject * object)
 {
+  GstVmdisplaysrc *vmdisplaysrc = GST_VMDISPLAYSRC (object);
+  if (vmdisplaysrc->allocator)
+    gst_object_unref (vmdisplaysrc->allocator);
   G_OBJECT_CLASS (parent_class)->finalize (object);
 }
 
