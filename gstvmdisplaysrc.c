@@ -341,19 +341,6 @@ gst_vmdisplaysrc_finalize (GObject * object)
   G_OBJECT_CLASS (parent_class)->finalize (object);
 }
 
-//#if 0
-/* Used for malloc memory passing */
-static void
-free_buffer (gpointer data)
-{
-  if (data != NULL) {
-    g_free (data);
-    data = NULL;
-  }
-}
-
-//#endif
-
 #ifdef USE_GVT
 
 void
@@ -421,9 +408,6 @@ get_new_primary_buffer (GstVmdisplaysrc * vmdisplaysrc, uint32_t * h)
 
 #endif
 
-
-
-
 /* ask the subclass to fill the buffer with data from offset and size */
 static GstFlowReturn
 gst_vmdisplaysrc_create (GstPushSrc * psrc, GstBuffer ** outbuf)
@@ -449,12 +433,9 @@ gst_vmdisplaysrc_create (GstPushSrc * psrc, GstBuffer ** outbuf)
 #ifndef USE_GVT
   {
     GstMemory *myMem;
-
     struct drm_mode_create_dumb creq;
-    //struct drm_mode_destroy_dumb dreq;
     struct drm_mode_map_dumb mreq;
     struct drm_prime_handle preq;
-
     uint32_t fb;
     int ret;
     void *map;
@@ -467,19 +448,21 @@ gst_vmdisplaysrc_create (GstPushSrc * psrc, GstBuffer ** outbuf)
 
     ret = drmIoctl (vmdisplaysrc->fd, DRM_IOCTL_MODE_CREATE_DUMB, &creq);
     if (ret < 0) {
-      gst_print ("Create failed\n");
+      GST_ERROR_OBJECT (vmdisplaysrc, "DRM Create Dumb failed ");
+      return GST_FLOW_ERROR;
       /* buffer creation failed; see "errno" for more error codes */
     }
     /* creq.pitch, creq.handle and creq.size are filled by this ioctl with
-     *  * the requested values and can be used now. */
+     * the requested values and can be used now. */
 
     /* create framebuffer object for the dumb-buffer */
     ret =
         drmModeAddFB (vmdisplaysrc->fd, info->width, info->height, 24, 32,
         creq.pitch, creq.handle, &fb);
     if (ret) {
-      gst_print ("AddFB failed\n");
       /* frame buffer creation failed; see "errno" */
+      GST_ERROR_OBJECT (vmdisplaysrc, "AddfD failed");
+      return GST_FLOW_ERROR;
     }
     /* the framebuffer "fb" can now used for scanout with KMS */
 
@@ -488,8 +471,9 @@ gst_vmdisplaysrc_create (GstPushSrc * psrc, GstBuffer ** outbuf)
     mreq.handle = creq.handle;
     ret = drmIoctl (vmdisplaysrc->fd, DRM_IOCTL_MODE_MAP_DUMB, &mreq);
     if (ret) {
-      gst_print ("Map failed\n");
       /* DRM buffer preparation failed; see "errno" */
+      GST_ERROR_OBJECT (vmdisplaysrc, "drm map_dumb failed\n");
+      return GST_FLOW_ERROR;
     }
     /* mreq.offset now contains the new offset that can be used with mmap() */
 
@@ -498,26 +482,26 @@ gst_vmdisplaysrc_create (GstPushSrc * psrc, GstBuffer ** outbuf)
         mmap (0, creq.size, PROT_READ | PROT_WRITE, MAP_SHARED,
         vmdisplaysrc->fd, mreq.offset);
     if (map == MAP_FAILED) {
-      gst_print ("mmap failed\n");
       /* memory-mapping failed; see "errno" */
+      GST_ERROR_OBJECT (vmdisplaysrc, "mapping failed");
+      return GST_FLOW_ERROR;
     }
 
     /* clear the framebuffer to 0 */
     memset (map, 0xFF, creq.size);
-    gst_print ("unmapping\n");
     munmap (map, creq.size);
-    gst_print ("unmapped\n");
 
     preq.handle = mreq.handle;
     preq.flags = DRM_CLOEXEC | DRM_RDWR;
 
-    gst_print ("getting PRIME FD\n");
     ret = drmIoctl (vmdisplaysrc->fd, DRM_IOCTL_PRIME_HANDLE_TO_FD, &preq);
     if (ret < 0) {
-      gst_print ("PRIME from handle failed, %d\n", errno);
       /* buffer creation failed; see "errno" for more error codes */
+      GST_ERROR_OBJECT (vmdisplaysrc, "PRIME_HANDLE_TO_FD Failed");
+      return GST_FLOW_ERROR;
     } else
-      gst_print ("FD is %d (s= 0x%x)\n", preq.fd, (gint) creq.size);
+      GST_DEBUG_OBJECT (vmdisplaysrc, "FD is %d (s= 0x%x)\n", preq.fd,
+          (gint) creq.size);
 
     myMem =
         gst_dmabuf_allocator_alloc (vmdisplaysrc->allocator, preq.fd,
@@ -526,7 +510,6 @@ gst_vmdisplaysrc_create (GstPushSrc * psrc, GstBuffer ** outbuf)
     gst_buffer_append_memory (*outbuf, myMem);
     gst_buffer_add_video_meta_full (*outbuf, 0, GST_VIDEO_INFO_FORMAT (info),
         info->width, info->height, 1, offset, stride);
-
   }
 
 #else
@@ -535,6 +518,9 @@ gst_vmdisplaysrc_create (GstPushSrc * psrc, GstBuffer ** outbuf)
     struct drm_i915_gem_gvtbuffer *v;
     uint32_t h;
     int waitcycle = 0;
+    unsigned int aligned_height;
+    unsigned int gtt_size;
+
     do {
       v = get_new_primary_buffer (vmdisplaysrc, &h);
       if (!v) {
@@ -542,9 +528,11 @@ gst_vmdisplaysrc_create (GstPushSrc * psrc, GstBuffer ** outbuf)
         waitcycle++;
       }
     } while (v == NULL);
-    unsigned int aligned_height = ALIGN (v->height, ((v->tiled == 4) ? 32 : 8));
-    unsigned int gtt_size = (v->stride * v->height);
-    g_printf ("pass after %d Prime: %d S=0x%x\n", waitcycle, h, gtt_size);
+
+    aligned_height = ALIGN (v->height, ((v->tiled == 4) ? 32 : 8));
+    gtt_size = (v->stride * v->height);
+    GST_DEBUG_OBJECT ("pass after %d Prime: %d S=0x%x\n", waitcycle, h,
+        gtt_size);
 
     myMem = gst_dmabuf_allocator_alloc (vmdisplaysrc->allocator, h, gtt_size);
     *outbuf = gst_buffer_new ();
@@ -569,10 +557,10 @@ plugin_init (GstPlugin * plugin)
 #define VERSION "0.0.1"
 #endif
 #ifndef PACKAGE
-#define PACKAGE "vmdisplay"
+#define PACKAGE "gst-vmdisplay"
 #endif
 #ifndef PACKAGE_NAME
-#define PACKAGE_NAME "vmdisplay"
+#define PACKAGE_NAME "gst-vmdisplay"
 #endif
 #ifndef GST_PACKAGE_ORIGIN
 #define GST_PACKAGE_ORIGIN "http://www.intel.com"
