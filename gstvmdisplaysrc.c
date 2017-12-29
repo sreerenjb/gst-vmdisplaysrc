@@ -66,6 +66,7 @@ typedef int32_t s32;
 #define PAGE_SIZE 0x1000
 #define PAGE_SHIFT 12
 static int g_Dbg = 1;
+static int last_handle = 0;
 #endif
 
 #define GST_VMDISPLAYSRC_FORMATS "{ BGRx, RGBx }"
@@ -184,7 +185,7 @@ gst_vmdisplaysrc_class_init (GstVmdisplaysrcClass * klass)
       "VMDisplay source", "Source/Video",
       "Zero copy source plugin for VMDisplay scraping",
       "Sreerenj Balachandran <sreerenj.balachandran@intel.com>, "
-      "Philippuse, Philippe <.Lecluse@intel.com>, "
+      "Lecluse, Philippe <philippe.lecluse@intel.com>, "
       "Hatcher, Philip <philip.hatcher@intel.com>");
 
   gst_element_class_add_static_pad_template (GST_ELEMENT_CLASS (klass),
@@ -374,6 +375,11 @@ get_new_primary_buffer (GstVmdisplaysrc * vmdisplaysrc, uint32_t * h)
   if (!vcreate.start)
     return NULL;
   if (vcreate.start != old_start) {
+    if (last_handle) {
+      close_gem_handle (vmdisplaysrc, last_handle);
+      last_handle = 0;
+    }
+
     vcreate.flags = 0;
     struct drm_i915_gem_gvtbuffer *vc = &vcreate;
     if (g_Dbg) {
@@ -396,8 +402,10 @@ get_new_primary_buffer (GstVmdisplaysrc * vmdisplaysrc, uint32_t * h)
       r = drmPrimeHandleToFD (vmdisplaysrc->fd, vcreate.handle,
           DRM_CLOEXEC | DRM_RDWR, &handle);
       if (g_Dbg) {
-        printf ("drmPrimeHandleToFD = %d - 0x%x\n", r, handle);
+        printf ("drmPrimeHandleToFD = %d - 0x%x - h=%d\n", r, handle,
+            vcreate.handle);
       }
+      last_handle = vcreate.handle;
       *h = handle;
     }
 #endif
@@ -531,8 +539,8 @@ gst_vmdisplaysrc_create (GstPushSrc * psrc, GstBuffer ** outbuf)
 
     aligned_height = ALIGN (v->height, ((v->tiled == 4) ? 32 : 8));
     gtt_size = (v->stride * v->height);
-    GST_DEBUG_OBJECT ("pass after %d Prime: %d S=0x%x\n", waitcycle, h,
-        gtt_size);
+    GST_DEBUG_OBJECT ("pass after %d Prime: %d S=0x%x  H=%d\n", waitcycle, h,
+        gtt_size, v->handle);
 
     myMem = gst_dmabuf_allocator_alloc (vmdisplaysrc->allocator, h, gtt_size);
     *outbuf = gst_buffer_new ();
