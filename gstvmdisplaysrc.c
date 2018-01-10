@@ -3,7 +3,7 @@
  *
  * Authors: 
  *   Sreerenj Balachandran <sreerenj.balachandran@intel.com>
- *   Philippuse, Philippe <.Lecluse@intel.com>
+ *   Lecluse, Philippe <philippe.lecluse@intel.com>
  *   Hatcher, Philip <philip.hatcher@intel.com>
  *
  * This library is free software; you can redistribute it and/or
@@ -532,21 +532,28 @@ gst_vmdisplaysrc_create (GstPushSrc * psrc, GstBuffer ** outbuf)
     do {
       v = get_new_primary_buffer (vmdisplaysrc, &h);
       if (!v) {
-        g_usleep (5*1000);
+        g_usleep (5 * 1000);
         waitcycle++;
       }
     } while (v == NULL);
 
     aligned_height = ALIGN (v->height, ((v->tiled == 4) ? 32 : 8));
     gtt_size = (v->stride * v->height);
-    GST_DEBUG_OBJECT ("pass after %d Prime: %d S=0x%x  H=%d\n", waitcycle, h,
-        gtt_size, v->handle);
+    GST_DEBUG_OBJECT (vmdisplaysrc, "pass after %d Prime: %d S=0x%x  H=%d\n",
+        waitcycle, h, gtt_size, v->handle);
 
-    myMem = gst_dmabuf_allocator_alloc (vmdisplaysrc->allocator, h, gtt_size);
-    *outbuf = gst_buffer_new ();
-    gst_buffer_append_memory (*outbuf, myMem);
-    gst_buffer_add_video_meta_full (*outbuf, 0, GST_VIDEO_INFO_FORMAT (info),
-        info->width, info->height, 1, offset, stride);
+    if (h) {
+      myMem = gst_dmabuf_allocator_alloc (vmdisplaysrc->allocator, h, gtt_size);
+      *outbuf = gst_buffer_new ();
+      gst_buffer_append_memory (*outbuf, myMem);
+      gst_buffer_add_video_meta_full (*outbuf, 0, GST_VIDEO_INFO_FORMAT (info),
+          info->width, info->height, 1, offset, stride);
+    } else {
+      GST_ERROR_OBJECT (vmdisplaysrc,
+          "Bad handle:  after %d Prime: %d S=0x%x  H=%d\n", waitcycle, h,
+          gtt_size, v->handle);
+      return GST_FLOW_ERROR;
+    }
   }
 #endif
 
