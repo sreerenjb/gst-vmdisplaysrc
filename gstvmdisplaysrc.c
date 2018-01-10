@@ -65,7 +65,7 @@ typedef int32_t s32;
 #include <igvtg-kernel-headers/drm.h>
 #define PAGE_SIZE 0x1000
 #define PAGE_SHIFT 12
-static int g_Dbg = 1;
+static int g_Dbg = 0;
 static int last_handle = 0;
 #endif
 
@@ -532,7 +532,7 @@ gst_vmdisplaysrc_create (GstPushSrc * psrc, GstBuffer ** outbuf)
     do {
       v = get_new_primary_buffer (vmdisplaysrc, &h);
       if (!v) {
-        g_usleep (100);
+        g_usleep (5*1000);
         waitcycle++;
       }
     } while (v == NULL);
